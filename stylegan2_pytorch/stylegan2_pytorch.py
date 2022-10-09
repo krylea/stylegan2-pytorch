@@ -47,6 +47,13 @@ import aim
 assert torch.cuda.is_available(), 'You need to have an Nvidia GPU with CUDA installed.'
 
 
+RGB_CHANNELS = {
+    'bw': 1,
+    'rgb': 3,
+    'rgba': 4
+}
+
+
 # constants
 
 NUM_CORES = multiprocessing.cpu_count()
@@ -357,23 +364,23 @@ def resize_to_minimum_size(min_size, image):
     return image
 
 class Dataset(data.Dataset):
-    def __init__(self, folder, image_size, transparent = False, aug_prob = 0.):
+    def __init__(self, folder, image_size, rgb='rgb', aug_prob = 0.):
         super().__init__()
         self.folder = folder
         self.image_size = image_size
         self.paths = [p for ext in EXTS for p in Path(f'{folder}').glob(f'**/*.{ext}')]
         assert len(self.paths) > 0, f'No images were found in {folder} for training'
 
-        convert_image_fn = convert_transparent_to_rgb if not transparent else convert_rgb_to_transparent
-        num_channels = 3 if not transparent else 4
+        #convert_image_fn = convert_transparent_to_rgb if not transparent else convert_rgb_to_transparent
+        num_channels = RGB_CHANNELS[rgb]
 
         self.transform = transforms.Compose([
-            transforms.Lambda(convert_image_fn),
+            #transforms.Lambda(convert_image_fn),
             transforms.Lambda(partial(resize_to_minimum_size, image_size)),
             transforms.Resize(image_size),
             RandomApply(aug_prob, transforms.RandomResizedCrop(image_size, scale=(0.5, 1.0), ratio=(0.98, 1.02)), transforms.CenterCrop(image_size)),
             transforms.ToTensor(),
-            transforms.Lambda(expand_greyscale(transparent))
+            #transforms.Lambda(expand_greyscale(transparent))
         ])
 
     def __len__(self):
@@ -435,12 +442,12 @@ class StyleVectorizer(nn.Module):
         return self.net(x)
 
 class RGBBlock(nn.Module):
-    def __init__(self, latent_dim, input_channel, upsample, rgba = False):
+    def __init__(self, latent_dim, input_channel, upsample, rgb='rgb'):
         super().__init__()
         self.input_channel = input_channel
         self.to_style = nn.Linear(latent_dim, input_channel)
 
-        out_filters = 3 if not rgba else 4
+        out_filters = RGB_CHANNELS[rgb]
         self.conv = Conv2DMod(input_channel, out_filters, 1, demod=False)
 
         self.upsample = nn.Sequential(
@@ -499,7 +506,7 @@ class Conv2DMod(nn.Module):
         return x
 
 class GeneratorBlock(nn.Module):
-    def __init__(self, latent_dim, input_channels, filters, upsample = True, upsample_rgb = True, rgba = False):
+    def __init__(self, latent_dim, input_channels, filters, upsample = True, upsample_rgb = True, rgb='rgb'):
         super().__init__()
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False) if upsample else None
 
@@ -512,7 +519,7 @@ class GeneratorBlock(nn.Module):
         self.conv2 = Conv2DMod(filters, filters, 3)
 
         self.activation = leaky_relu()
-        self.to_rgb = RGBBlock(latent_dim, filters, upsample_rgb, rgba)
+        self.to_rgb = RGBBlock(latent_dim, filters, upsample_rgb, rgb)
 
     def forward(self, x, prev_rgb, istyle, inoise):
         if exists(self.upsample):
@@ -559,7 +566,7 @@ class DiscriminatorBlock(nn.Module):
         return x
 
 class Generator(nn.Module):
-    def __init__(self, image_size, latent_dim, network_capacity = 16, transparent = False, attn_layers = [], no_const = False, fmap_max = 512):
+    def __init__(self, image_size, latent_dim, network_capacity = 16, rgb = 'rgb', attn_layers = [], no_const = False, fmap_max = 512):
         super().__init__()
         self.image_size = image_size
         self.latent_dim = latent_dim
@@ -599,7 +606,7 @@ class Generator(nn.Module):
                 out_chan,
                 upsample = not_first,
                 upsample_rgb = not_last,
-                rgba = transparent
+                rgb = rgb
             )
             self.blocks.append(block)
 
@@ -625,10 +632,10 @@ class Generator(nn.Module):
         return rgb
 
 class Discriminator(nn.Module):
-    def __init__(self, image_size, network_capacity = 16, fq_layers = [], fq_dict_size = 256, attn_layers = [], transparent = False, fmap_max = 512):
+    def __init__(self, image_size, network_capacity = 16, fq_layers = [], fq_dict_size = 256, attn_layers = [], rgb='rgb', fmap_max = 512):
         super().__init__()
         num_layers = int(log2(image_size) - 1)
-        num_init_filters = 3 if not transparent else 4
+        num_init_filters = RGB_CHANNELS[rgb]
 
         blocks = []
         filters = [num_init_filters] + [(network_capacity * 4) * (2 ** i) for i in range(num_layers + 1)]
@@ -687,18 +694,18 @@ class Discriminator(nn.Module):
         return x.squeeze(), quantize_loss
 
 class StyleGAN2(nn.Module):
-    def __init__(self, image_size, latent_dim = 512, fmap_max = 512, style_depth = 8, network_capacity = 16, transparent = False, fp16 = False, cl_reg = False, steps = 1, lr = 1e-4, ttur_mult = 2, fq_layers = [], fq_dict_size = 256, attn_layers = [], no_const = False, lr_mlp = 0.1, rank = 0):
+    def __init__(self, image_size, latent_dim = 512, fmap_max = 512, style_depth = 8, network_capacity = 16, rgb = 'rgb', fp16 = False, cl_reg = False, steps = 1, lr = 1e-4, ttur_mult = 2, fq_layers = [], fq_dict_size = 256, attn_layers = [], no_const = False, lr_mlp = 0.1, rank = 0):
         super().__init__()
         self.lr = lr
         self.steps = steps
         self.ema_updater = EMA(0.995)
 
         self.S = StyleVectorizer(latent_dim, style_depth, lr_mul = lr_mlp)
-        self.G = Generator(image_size, latent_dim, network_capacity, transparent = transparent, attn_layers = attn_layers, no_const = no_const, fmap_max = fmap_max)
-        self.D = Discriminator(image_size, network_capacity, fq_layers = fq_layers, fq_dict_size = fq_dict_size, attn_layers = attn_layers, transparent = transparent, fmap_max = fmap_max)
+        self.G = Generator(image_size, latent_dim, network_capacity, rgb = rgb, attn_layers = attn_layers, no_const = no_const, fmap_max = fmap_max)
+        self.D = Discriminator(image_size, network_capacity, fq_layers = fq_layers, fq_dict_size = fq_dict_size, attn_layers = attn_layers, rgb = rgb, fmap_max = fmap_max)
 
         self.SE = StyleVectorizer(latent_dim, style_depth, lr_mul = lr_mlp)
-        self.GE = Generator(image_size, latent_dim, network_capacity, transparent = transparent, attn_layers = attn_layers, no_const = no_const)
+        self.GE = Generator(image_size, latent_dim, network_capacity, rgb = rgb, attn_layers = attn_layers, no_const = no_const)
 
         self.D_cl = None
 
@@ -768,7 +775,7 @@ class Trainer():
         image_size = 128,
         network_capacity = 16,
         fmap_max = 512,
-        transparent = False,
+        rgb = 'rgb',
         batch_size = 4,
         mixed_prob = 0.9,
         gradient_accumulate_every=1,
@@ -821,7 +828,7 @@ class Trainer():
         self.image_size = image_size
         self.network_capacity = network_capacity
         self.fmap_max = fmap_max
-        self.transparent = transparent
+        self.rgb = rgb
 
         self.fq_layers = cast_list(fq_layers)
         self.fq_dict_size = fq_dict_size
@@ -904,7 +911,7 @@ class Trainer():
         
     def init_GAN(self):
         args, kwargs = self.GAN_params
-        self.GAN = StyleGAN2(lr = self.lr, lr_mlp = self.lr_mlp, ttur_mult = self.ttur_mult, image_size = self.image_size, network_capacity = self.network_capacity, fmap_max = self.fmap_max, transparent = self.transparent, fq_layers = self.fq_layers, fq_dict_size = self.fq_dict_size, attn_layers = self.attn_layers, fp16 = self.fp16, cl_reg = self.cl_reg, no_const = self.no_const, rank = self.rank, *args, **kwargs)
+        self.GAN = StyleGAN2(lr = self.lr, lr_mlp = self.lr_mlp, ttur_mult = self.ttur_mult, image_size = self.image_size, network_capacity = self.network_capacity, fmap_max = self.fmap_max, rgb = self.rgb, fq_layers = self.fq_layers, fq_dict_size = self.fq_dict_size, attn_layers = self.attn_layers, fp16 = self.fp16, cl_reg = self.cl_reg, no_const = self.no_const, rank = self.rank, *args, **kwargs)
 
         if self.is_ddp:
             ddp_kwargs = {'device_ids': [self.rank]}
@@ -923,7 +930,7 @@ class Trainer():
         config = self.config() if not self.config_path.exists() else json.loads(self.config_path.read_text())
         self.image_size = config['image_size']
         self.network_capacity = config['network_capacity']
-        self.transparent = config['transparent']
+        self.rgb = config['rgb']
         self.fq_layers = config['fq_layers']
         self.fq_dict_size = config['fq_dict_size']
         self.fmap_max = config.pop('fmap_max', 512)
@@ -934,10 +941,10 @@ class Trainer():
         self.init_GAN()
 
     def config(self):
-        return {'image_size': self.image_size, 'network_capacity': self.network_capacity, 'lr_mlp': self.lr_mlp, 'transparent': self.transparent, 'fq_layers': self.fq_layers, 'fq_dict_size': self.fq_dict_size, 'attn_layers': self.attn_layers, 'no_const': self.no_const}
+        return {'image_size': self.image_size, 'network_capacity': self.network_capacity, 'lr_mlp': self.lr_mlp, 'rgb': self.rgb, 'fq_layers': self.fq_layers, 'fq_dict_size': self.fq_dict_size, 'attn_layers': self.attn_layers, 'no_const': self.no_const}
 
     def set_data_src(self, folder):
-        self.dataset = Dataset(folder, self.image_size, transparent = self.transparent, aug_prob = self.dataset_aug_prob)
+        self.dataset = Dataset(folder, self.image_size, rgb = self.rgb, aug_prob = self.dataset_aug_prob)
         num_workers = num_workers = default(self.num_workers, NUM_CORES if not self.is_ddp else 0)
         sampler = DistributedSampler(self.dataset, rank=self.rank, num_replicas=self.world_size, shuffle=True) if self.is_ddp else None
         dataloader = data.DataLoader(self.dataset, num_workers = num_workers, batch_size = math.ceil(self.batch_size / self.world_size), sampler = sampler, shuffle = not self.is_ddp, drop_last = True, pin_memory = True)
@@ -1308,7 +1315,7 @@ class Trainer():
             images_grid = torchvision.utils.make_grid(generated_images, nrow = num_rows)
             pil_image = transforms.ToPILImage()(images_grid.cpu())
             
-            if self.transparent:
+            if self.rgb == 'rgba':
                 background = Image.new("RGBA", pil_image.size, (255, 255, 255))
                 pil_image = Image.alpha_composite(background, pil_image)
                 
