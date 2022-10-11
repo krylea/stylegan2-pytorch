@@ -712,7 +712,7 @@ class StyleGAN2(nn.Module):
         if cl_reg:
             from contrastive_learner import ContrastiveLearner
             # experimental contrastive loss discriminator regularization
-            assert not transparent, 'contrastive loss regularization does not work with transparent images yet'
+            assert rgb != "rgba", 'contrastive loss regularization does not work with transparent images yet'
             self.D_cl = ContrastiveLearner(self.D, image_size, hidden_layer='flatten')
 
         # wrapper for augmenting all images going into the discriminator
