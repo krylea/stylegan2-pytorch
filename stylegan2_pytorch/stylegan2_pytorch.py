@@ -580,8 +580,8 @@ class Trainer():
     def config(self):
         return {'image_size': self.image_size, 'network_capacity': self.network_capacity, 'lr_mlp': self.lr_mlp, 'rgb': self.rgb, 'fq_layers': self.fq_layers, 'fq_dict_size': self.fq_dict_size, 'attn_layers': self.attn_layers, 'no_const': self.no_const}
 
-    def set_data_src(self, dataset_name):
-        self.dataset = make_dataset(dataset_name, self.image_size, aug_prob = self.dataset_aug_prob)
+    def set_data_src(self, dataset_name, data_dir='./data'):
+        self.dataset = make_dataset(dataset_name, self.image_size, aug_prob = self.dataset_aug_prob, data_dir=data_dir)
         num_workers = num_workers = default(self.num_workers, NUM_CORES if not self.is_ddp else 0)
         sampler = DistributedSampler(self.dataset, rank=self.rank, num_replicas=self.world_size, shuffle=True) if self.is_ddp else None
         dataloader = data.DataLoader(self.dataset, num_workers = num_workers, batch_size = math.ceil(self.batch_size / self.world_size), sampler = sampler, shuffle = not self.is_ddp, drop_last = True, pin_memory = True)
