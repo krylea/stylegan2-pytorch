@@ -123,11 +123,11 @@ class FolderDataset(data.Dataset):
 
 class VGGFaceDataset(data.Dataset):
     @classmethod
-    def load(cls, data_path, **kwargs):
+    def load(cls, data_path, image_size, **kwargs):
         all_imgs = torch.tensor(np.load(data_path))
         all_imgs = all_imgs.permute(0,1,4,2,3)                          #  X x Y x C -> C x X x Y
         all_imgs = all_imgs.index_select(2, torch.tensor([2,1,0]))      #  convert from BGR to RGB
-        return cls(all_imgs.view(-1, *all_imgs.size()[-3:]), **kwargs)
+        return cls(all_imgs.view(-1, *all_imgs.size()[-3:]), image_size, **kwargs)
 
     def __init__(self, dataset, image_size, rgb='rgb', aug_prob = 0.):
         super().__init__()
