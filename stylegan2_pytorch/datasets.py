@@ -122,6 +122,7 @@ class FolderDataset(data.Dataset):
 
 
 class VGGFaceDataset(data.Dataset):
+    @classmethod
     def load(cls, data_path, **kwargs):
         all_imgs = torch.tensor(np.load(data_path))
         all_imgs = all_imgs.permute(0,1,4,2,3)                          #  X x Y x C -> C x X x Y
